@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>简知订单助手</title>
+	<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+	<div class="container">
+		<h1>简知订单助手</h1>
+		<p class="hint">拖拽 Excel 到下方区域，或点击选择文件。按 ESC 可随时停止发送。</p>
+
+		<div id="drop-area" class="drop-area">
+			<input type="file" id="file-input" accept=".xlsx,.xls" />
+			<p>将 Excel 文件拖拽到这里，或点击选择</p>
+		</div>
+
+		<div class="options">
+			<div>
+				<label>午餐起始编号</label>
+				<input type="number" id="lunchStart" value="7" min="1" />
+			</div>
+			<div>
+				<label>晚餐起始编号</label>
+				<input type="number" id="dinnerStart" value="7" min="1" />
+			</div>
+			<div>
+				<label>发送目标</label>
+				<select id="target">
+					<option value="both">午餐 + 晚餐</option>
+					<option value="lunch">仅午餐</option>
+					<option value="dinner">仅晚餐</option>
+				</select>
+			</div>
+			<div>
+				<label>测试模式</label>
+				<input type="checkbox" id="testMode" checked />
+			</div>
+		</div>
+
+		<div class="actions">
+			<button id="btnPreview">预览</button>
+			<button id="btnSendTest">发送测试</button>
+			<button id="btnSend">正式发送</button>
+			<button id="btnStop" class="danger">停止发送 (ESC)</button>
+		</div>
+
+		<div class="results">
+			<div>
+				<h3>午餐预览</h3>
+				<pre id="previewLunch"></pre>
+			</div>
+			<div>
+				<h3>晚餐预览</h3>
+				<pre id="previewDinner"></pre>
+			</div>
+		</div>
+	</div>
+
+	<script src="/static/main.js"></script>
+</body>
+</html>
