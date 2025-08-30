@@ -84,29 +84,72 @@ def detect_csv_encoding(file_path: str) -> str:
 
 
 def load_dataframe(file_path: str, sheet_name: Optional[str] = None) -> Tuple[pd.DataFrame, List[str]]:
+    """Load Excel/CSV broadly: supports xlsx/xlsm/xltx/xltm/xls/xlsb/ods/csv/txt.
+    Fallback through multiple engines where possible.
+    """
     ext = os.path.splitext(file_path)[1].lower()
+
+    def try_excel_with_engines(engines: List[str]) -> Tuple[pd.DataFrame, List[str]]:
+        last_err: Optional[Exception] = None
+        for eng in engines:
+            try:
+                xls = pd.ExcelFile(file_path, engine=eng)
+                sheets = xls.sheet_names
+                df = pd.read_excel(xls, sheet_name=sheet_name or sheets[0])
+                return df, sheets
+            except Exception as e:
+                last_err = e
+                continue
+        if last_err:
+            raise last_err
+        raise RuntimeError("无法读取 Excel 文件")
+
+    # Excel formats
     if ext in [".xlsx", ".xlsm", ".xltx", ".xltm"]:
-        xls = pd.ExcelFile(file_path, engine="openpyxl")
-        sheets = xls.sheet_names
-        df = pd.read_excel(xls, sheet_name=sheet_name or sheets[0])
-        return df, sheets
+        return try_excel_with_engines(["openpyxl"])  # modern Excel
     if ext == ".xls":
-        # xlrd 1.2.0 supports xls
-        xls = pd.ExcelFile(file_path, engine="xlrd")
-        sheets = xls.sheet_names
-        df = pd.read_excel(xls, sheet_name=sheet_name or sheets[0])
-        return df, sheets
+        return try_excel_with_engines(["xlrd"])  # legacy Excel
+    if ext == ".xlsb":
+        return try_excel_with_engines(["pyxlsb"])  # binary Excel
+    if ext == ".ods":
+        return try_excel_with_engines(["odf"])  # OpenDocument Spreadsheet
+
+    # CSV/TXT with encoding and delimiter sniffing
     if ext in [".csv", ".txt"]:
         enc = detect_csv_encoding(file_path)
-        df = pd.read_csv(file_path, encoding=enc)
+        try:
+            # sep=None uses Python engine's sniffing
+            df = pd.read_csv(file_path, encoding=enc, sep=None, engine="python")
+        except Exception:
+            # Fallback to utf-8 and common separators
+            try:
+                df = pd.read_csv(file_path, encoding="utf-8", sep=None, engine="python", errors="ignore")
+            except Exception:
+                df = pd.read_csv(file_path, encoding="utf-8", sep=",", engine="python", errors="ignore")
         return df, ["CSV"]
-    raise ValueError("仅支持 xlsx/xls/csv/txt 文件")
+
+    # Unknown extension: still try Excel engines in broad order
+    try:
+        return try_excel_with_engines(["openpyxl", "xlrd", "pyxlsb", "odf"]) 
+    except Exception:
+        pass
+    # As a last resort, try reading as CSV
+    try:
+        enc = detect_csv_encoding(file_path)
+        df = pd.read_csv(file_path, encoding=enc, sep=None, engine="python")
+        return df, ["CSV"]
+    except Exception:
+        raise ValueError("不受支持的文件类型，请提供 Excel 或 CSV 文件")
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # Strip whitespace from headers and convert to string
-    df.columns = [str(c).strip() for c in df.columns]
+    # Flatten MultiIndex and normalize to string headers
+    def _to_str(col) -> str:
+        if isinstance(col, tuple):
+            return " ".join([str(x).strip() for x in col])
+        return str(col).strip()
+    df.columns = [_to_str(c) for c in df.columns]
     return df
 
 
