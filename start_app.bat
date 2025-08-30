@@ -1,43 +1,52 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-REM Force UTF-8 to avoid Chinese garbled text
+REM Use UTF-8 code page to reduce garbled output
 chcp 65001 >nul
 
 REM Resolve script directory
-set SCRIPT_DIR=%~dp0
+set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
 
-REM Create virtual environment
-if not exist .venv (
-  py -3 -m venv .venv
+REM Pick Python launcher
+where py >nul 2>nul
+if %errorlevel%==0 (
+  set "PYLAUNCH=py -3"
+) else (
+  set "PYLAUNCH=python"
 )
 
-call .venv\Scripts\activate.bat
+REM Create virtual environment
+if not exist ".venv" (
+  %PYLAUNCH% -m venv .venv
+)
 
-REM Upgrade pip and wheel
-python -m pip install --upgrade pip wheel setuptools
+call ".venv\Scripts\activate.bat"
+
+REM Upgrade pip toolchain
+python -m pip install --upgrade pip setuptools wheel
 
 REM Install dependencies with retries
 set RETRIES=3
 for /l %%i in (1,1,%RETRIES%) do (
-  python -m pip install -r requirements.txt && goto :deps_ok
-  echo 安装依赖失败，正在重试 (%%i/%RETRIES%)...
+  python -m pip install -r requirements.txt && goto deps_ok
+  echo Install failed, retry %%i/%RETRIES%...
   timeout /t 2 >nul
 )
-echo 依赖安装失败，请检查网络或代理设置。
+echo Dependencies installation failed.
 pause
 goto :eof
 
 :deps_ok
-echo 依赖安装成功。
+echo Dependencies installed.
 
-REM Launch app
+REM Ensure wxauto and pywin32 present (redundant if requirements ok)
+python -m pip install wxauto pywin32
+
 set PYTHONUTF8=1
 python -X utf8 -m wx_order_sender.main
 
-REM Keep window open after exit
-echo .
+echo.
 pause
 
 endlocal
