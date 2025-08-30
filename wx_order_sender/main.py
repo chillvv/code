@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+from openpyxl import load_workbook  # robust XLSX reader
 
 
 # Optional imports which only work on Windows; guard at runtime
@@ -106,9 +107,15 @@ def load_dataframe(file_path: str, sheet_name: Optional[str] = None) -> Tuple[pd
 
     # Excel formats
     if ext in [".xlsx", ".xlsm", ".xltx", ".xltm"]:
-        return try_excel_with_engines(["openpyxl"])  # modern Excel
+        # Prefer using openpyxl directly for robustness with partially damaged files
+        return load_xlsx_via_openpyxl(file_path, sheet_name)
     if ext == ".xls":
-        return try_excel_with_engines(["xlrd"])  # legacy Excel
+        # Prefer pyexcel-xls for legacy binary Excel
+        try:
+            return load_xls_via_pyexcel(file_path, sheet_name)
+        except Exception:
+            # As a fallback, attempt pandas engine chain (may fail with xlrd>=2)
+            return try_excel_with_engines(["xlrd"])  # legacy Excel
     if ext == ".xlsb":
         return try_excel_with_engines(["pyxlsb"])  # binary Excel
     if ext == ".ods":
@@ -130,7 +137,7 @@ def load_dataframe(file_path: str, sheet_name: Optional[str] = None) -> Tuple[pd
 
     # Unknown extension: still try Excel engines in broad order
     try:
-        return try_excel_with_engines(["openpyxl", "xlrd", "pyxlsb", "odf"]) 
+        return try_excel_with_engines(["openpyxl", "pyxlsb", "odf"]) 
     except Exception:
         pass
     # As a last resort, try reading as CSV
@@ -140,6 +147,60 @@ def load_dataframe(file_path: str, sheet_name: Optional[str] = None) -> Tuple[pd
         return df, ["CSV"]
     except Exception:
         raise ValueError("不受支持的文件类型，请提供 Excel 或 CSV 文件")
+
+
+def _guess_header_and_data(rows: List[List[object]]) -> Tuple[List[str], List[List[object]]]:
+    # Find the row within the first 10 lines with the most non-empty cells as header
+    max_nonempty = -1
+    header_idx = 0
+    for i in range(min(10, len(rows))):
+        nonempty = sum(1 for v in rows[i] if v not in (None, ""))
+        if nonempty > max_nonempty:
+            max_nonempty = nonempty
+            header_idx = i
+    headers_raw = rows[header_idx] if rows else []
+    headers = [str(h).strip() if h is not None else f"列{i+1}" for i, h in enumerate(headers_raw)]
+    data_rows = rows[header_idx + 1 :] if header_idx + 1 <= len(rows) else []
+    # Normalize row lengths to headers
+    width = len(headers)
+    normalized = []
+    for r in data_rows:
+        r = list(r)
+        if len(r) < width:
+            r = r + [None] * (width - len(r))
+        elif len(r) > width:
+            r = r[:width]
+        normalized.append(r)
+    return headers, normalized
+
+
+def load_xlsx_via_openpyxl(file_path: str, sheet_name: Optional[str]) -> Tuple[pd.DataFrame, List[str]]:
+    wb = load_workbook(filename=file_path, read_only=True, data_only=True)
+    sheets = wb.sheetnames
+    name = sheet_name or (sheets[0] if sheets else None)
+    if name is None:
+        return pd.DataFrame(), []
+    ws = wb[name]
+    rows: List[List[object]] = []
+    for row in ws.iter_rows(values_only=True):
+        rows.append(list(row))
+    headers, data_rows = _guess_header_and_data(rows)
+    df = pd.DataFrame(data_rows, columns=headers)
+    return df, sheets
+
+
+def load_xls_via_pyexcel(file_path: str, sheet_name: Optional[str]) -> Tuple[pd.DataFrame, List[str]]:
+    # Requires: pyexcel-xls, pyexcel-io
+    from pyexcel_xls import get_data  # type: ignore
+    data_dict = get_data(file_path)
+    sheets = list(data_dict.keys())
+    name = sheet_name or (sheets[0] if sheets else None)
+    if name is None:
+        return pd.DataFrame(), []
+    rows = data_dict[name]
+    headers, data_rows = _guess_header_and_data(rows)
+    df = pd.DataFrame(data_rows, columns=headers)
+    return df, sheets
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
