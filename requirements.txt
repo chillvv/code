@@ -8,5 +8,7 @@ pyexcel-xls>=0.6.2,<1.0
 PyQt5>=5.15.9,<6.0
 keyboard>=0.13.5,<1.0
 chardet>=5.2.0,<6.0
-pywin32>=306; platform_system == "Windows"
-wxauto>=3.9.10; platform_system == "Windows"
+qasync>=0.24.0,<1.0
+wechaty>=0.10.4,<1.0
+wechaty-puppet>=0.4.8,<1.0
+wechaty-puppet-service>=0.10.20,<1.0

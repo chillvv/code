@@ -2,6 +2,7 @@ import os
 import sys
 import platform
 import threading
+import asyncio
 import time
 import random
 import traceback
@@ -11,17 +12,18 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+from qasync import QEventLoop, asyncSlot
+
+try:
+    from wechaty import Wechaty, RoomQueryFilter, WechatyOptions
+    from wechaty_puppet import PuppetOptions
+    WECHATY_AVAILABLE = True
+except Exception:
+    WECHATY_AVAILABLE = False
 from openpyxl import load_workbook  # robust XLSX reader
 
 
-# Optional imports which only work on Windows; guard at runtime
-WXAUTO_AVAILABLE = False
-if platform.system().lower() == "windows":
-    try:
-        from wxauto import WeChat  # type: ignore
-        WXAUTO_AVAILABLE = True
-    except Exception:
-        WXAUTO_AVAILABLE = False
+BOT_NOT_READY_MSG = "Wechaty 未连接，请先设置 Token 并点击‘连接’"
 
 
 REQUIRED_COLUMNS = ["商品信息", "支付状态", "订单状态", "收货地址", "用户备注"]
@@ -334,45 +336,39 @@ def build_output(df: pd.DataFrame, mapping: ColumnMapping, start_number: int, ti
     return "\n".join(lines)
 
 
-class SenderThread(QtCore.QThread):
+class SendController(QtCore.QObject):
     progressed = QtCore.pyqtSignal(str)
     finished_ok = QtCore.pyqtSignal()
     failed = QtCore.pyqtSignal(str)
 
-    def __init__(self, lunch_text: str, dinner_text: str, lunch_group: str, dinner_group: str, interval_min: float, interval_max: float, test_mode: bool):
+    def __init__(self):
         super().__init__()
-        self.lunch_text = lunch_text
-        self.dinner_text = dinner_text
-        self.lunch_group = lunch_group
-        self.dinner_group = dinner_group
-        self.interval_min = interval_min
-        self.interval_max = interval_max
-        self.test_mode = test_mode
-        self._stop = threading.Event()
+        self._stop = asyncio.Event()
+        self.bot: Optional[Wechaty] = None
+
+    def set_bot(self, bot: Optional['Wechaty']):
+        self.bot = bot
 
     def stop(self):
-        self._stop.set()
+        if not self._stop.is_set():
+            self._stop.set()
 
-    def _sleep_with_check(self, seconds: float):
-        end = time.time() + seconds
-        while time.time() < end:
-            if self._stop.is_set():
-                return False
-            time.sleep(0.05)
-        return True
-
-    def run(self):
+    async def _sleep_with_check(self, seconds: float) -> bool:
         try:
-            if not WXAUTO_AVAILABLE:
-                raise RuntimeError("当前环境不支持 WeChat 自动发送（仅限 Windows 并安装 wxauto）")
+            await asyncio.wait_for(asyncio.sleep(seconds), timeout=seconds + 1)
+            return not self._stop.is_set()
+        except asyncio.CancelledError:
+            return False
 
-            wx = WeChat()
-
-            targets = [(self.lunch_group, self.lunch_text), (self.dinner_group, self.dinner_text)]
-            if self.test_mode:
-                # Force to send to test group "末"
-                targets = [("末", self.lunch_text), ("末", self.dinner_text)]
-
+    async def send_texts(self, lunch_text: str, dinner_text: str, lunch_group: str, dinner_group: str, interval_min: float, interval_max: float, test_mode: bool):
+        try:
+            if not WECHATY_AVAILABLE:
+                raise RuntimeError("Wechaty 依赖未安装")
+            if self.bot is None:
+                raise RuntimeError(BOT_NOT_READY_MSG)
+            targets = [(lunch_group, lunch_text), (dinner_group, dinner_text)]
+            if test_mode:
+                targets = [("末", lunch_text), ("末", dinner_text)]
             for idx, (group, text) in enumerate(targets):
                 if self._stop.is_set():
                     self.progressed.emit("已停止发送")
@@ -382,26 +378,29 @@ class SenderThread(QtCore.QThread):
                     continue
                 self.progressed.emit(f"正在发送到：{group}")
                 try:
-                    wx.ChatWith(group)
-                    # Split huge messages to avoid length limits
+                    # Find room by topic
+                    room = await self.bot.Room.find(query=RoomQueryFilter(topic=group))
+                    if room is None:
+                        self.progressed.emit(f"未找到群聊：{group}")
+                        continue
                     chunks = split_message_chunks(text, max_len=3500)
                     for n, chunk in enumerate(chunks, start=1):
                         if self._stop.is_set():
                             self.progressed.emit("已停止发送")
                             return
-                        wx.SendMsg(chunk)
+                        await room.say(chunk)
                         self.progressed.emit(f"已发送 {group} 第 {n} 段")
-                        # Delay between chunks
                         if n < len(chunks):
-                            delay = random.uniform(self.interval_min, self.interval_max)
-                            if not self._sleep_with_check(delay):
+                            delay = random.uniform(interval_min, interval_max)
+                            ok = await self._sleep_with_check(delay)
+                            if not ok:
                                 return
                 except Exception as e:
                     self.progressed.emit(f"发送到 {group} 失败：{e}")
-                # Delay between groups
                 if idx < len(targets) - 1:
-                    delay = random.uniform(self.interval_min, self.interval_max)
-                    if not self._sleep_with_check(delay):
+                    delay = random.uniform(interval_min, interval_max)
+                    ok = await self._sleep_with_check(delay)
+                    if not ok:
                         return
             self.finished_ok.emit()
         except Exception as e:
@@ -436,14 +435,16 @@ def split_message_chunks(text: str, max_len: int = 3500) -> List[str]:
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("简知订单整理发送器（wxauto）")
+        self.setWindowTitle("简知订单整理发送器（Wechaty）")
         self.setMinimumSize(960, 680)
 
         self.df: Optional[pd.DataFrame] = None
         self.sheets: List[str] = []
         self.current_file: Optional[str] = None
         self.mapping: Optional[ColumnMapping] = None
-        self.sender_thread: Optional[SenderThread] = None
+        self.send_controller = SendController()
+        self.bot: Optional[Wechaty] = None
+        self._send_task: Optional[asyncio.Task] = None
 
         self._init_ui()
 
@@ -497,6 +498,15 @@ class MainWindow(QtWidgets.QMainWindow):
         # Settings row
         settings_group = QtWidgets.QGroupBox("发送设置")
         form = QtWidgets.QGridLayout(settings_group)
+        # Wechaty token controls
+        self.token_edit = QtWidgets.QLineEdit()
+        self.token_edit.setPlaceholderText("Wechaty Puppet Service Token")
+        self.btn_connect = QtWidgets.QPushButton("连接")
+        self.btn_disconnect = QtWidgets.QPushButton("断开")
+        self.btn_disconnect.setEnabled(False)
+        self.btn_connect.clicked.connect(self.on_connect)
+        self.btn_disconnect.clicked.connect(self.on_disconnect)
+
 
         self.lunch_start = QtWidgets.QSpinBox()
         self.lunch_start.setRange(1, 100000)
@@ -534,12 +544,15 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addWidget(QtWidgets.QLabel("晚餐起始编号："), 0, 2)
         form.addWidget(self.dinner_start, 0, 3)
 
-        form.addWidget(QtWidgets.QLabel("午餐发送至："), 1, 0)
-        form.addWidget(self.cmb_lunch_group, 1, 1)
-        form.addWidget(QtWidgets.QLabel("晚餐发送至："), 1, 2)
-        form.addWidget(self.cmb_dinner_group, 1, 3)
+        form.addWidget(QtWidgets.QLabel("Wechaty Token："), 1, 0)
+        form.addWidget(self.token_edit, 1, 1, 1, 3)
 
-        form.addWidget(QtWidgets.QLabel("发送间隔（秒）："), 2, 0)
+        form.addWidget(QtWidgets.QLabel("午餐发送至："), 2, 0)
+        form.addWidget(self.cmb_lunch_group, 2, 1)
+        form.addWidget(QtWidgets.QLabel("晚餐发送至："), 2, 2)
+        form.addWidget(self.cmb_dinner_group, 2, 3)
+
+        form.addWidget(QtWidgets.QLabel("发送间隔（秒）："), 3, 0)
         interval_row = QtWidgets.QHBoxLayout()
         interval_row.addWidget(QtWidgets.QLabel("最小"))
         interval_row.addWidget(self.min_interval)
@@ -548,9 +561,16 @@ class MainWindow(QtWidgets.QMainWindow):
         interval_row.addWidget(self.max_interval)
         interval_widget = QtWidgets.QWidget()
         interval_widget.setLayout(interval_row)
-        form.addWidget(interval_widget, 2, 1, 1, 3)
+        form.addWidget(interval_widget, 3, 1, 1, 3)
 
-        form.addWidget(self.test_mode, 3, 0, 1, 4)
+        form.addWidget(self.test_mode, 4, 0, 1, 2)
+        btns_widget = QtWidgets.QWidget()
+        btns_layout = QtWidgets.QHBoxLayout(btns_widget)
+        btns_layout.setContentsMargins(0,0,0,0)
+        btns_layout.addWidget(self.btn_connect)
+        btns_layout.addWidget(self.btn_disconnect)
+        btns_layout.addStretch(1)
+        form.addWidget(btns_widget, 4, 2, 1, 2)
 
         root.addWidget(settings_group)
 
@@ -686,6 +706,44 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "预览失败", f"{e}\n\n{traceback.format_exc()}")
 
+    @asyncSlot()
+    async def on_connect(self):
+        if not WECHATY_AVAILABLE:
+            QtWidgets.QMessageBox.critical(self, "连接失败", "Wechaty 依赖未安装")
+            return
+        token = self.token_edit.text().strip()
+        if not token:
+            QtWidgets.QMessageBox.warning(self, "缺少 Token", "请先输入 Wechaty Puppet Service Token")
+            return
+        try:
+            if self.bot is not None:
+                QtWidgets.QMessageBox.information(self, "提示", "已连接")
+                return
+            options = WechatyOptions(puppet='wechaty-puppet-service', puppet_options=PuppetOptions(token=token))
+            self.bot = Wechaty(options)
+            self.send_controller.set_bot(self.bot)
+            await self.bot.start()
+            self.btn_connect.setEnabled(False)
+            self.btn_disconnect.setEnabled(True)
+            self.status.setText("Wechaty 已连接")
+        except Exception as e:
+            self.bot = None
+            self.send_controller.set_bot(None)
+            QtWidgets.QMessageBox.critical(self, "连接失败", str(e))
+
+    @asyncSlot()
+    async def on_disconnect(self):
+        try:
+            if self.bot is not None:
+                await self.bot.stop()
+            self.bot = None
+            self.send_controller.set_bot(None)
+            self.btn_connect.setEnabled(True)
+            self.btn_disconnect.setEnabled(False)
+            self.status.setText("已断开连接")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "断开失败", str(e))
+
     def on_send(self):
         try:
             lunch_text, dinner_text = self._build_preview_texts()
@@ -706,8 +764,15 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "缺少群聊", "请至少设置一个群聊或开启测试模式")
             return
 
+        if self.bot is None:
+            QtWidgets.QMessageBox.warning(self, "未连接", BOT_NOT_READY_MSG)
+            return
+        if self._send_task and not self._send_task.done():
+            QtWidgets.QMessageBox.information(self, "提示", "发送任务进行中…")
+            return
         self.btn_send.setEnabled(False)
-        self.sender_thread = SenderThread(
+        self.send_controller._stop.clear()
+        coro = self.send_controller.send_texts(
             lunch_text=lunch_text,
             dinner_text=dinner_text,
             lunch_group=lunch_group,
@@ -716,15 +781,16 @@ class MainWindow(QtWidgets.QMainWindow):
             interval_max=ma,
             test_mode=self.test_mode.isChecked(),
         )
-        self.sender_thread.progressed.connect(self.on_progress)
-        self.sender_thread.finished_ok.connect(self.on_finished)
-        self.sender_thread.failed.connect(self.on_failed)
-        self.sender_thread.start()
-        self.status.setText("正在发送… 切勿操作微信窗口以免打断。")
+        loop = asyncio.get_event_loop()
+        self._send_task = loop.create_task(coro)
+        self.send_controller.progressed.connect(self.on_progress)
+        self.send_controller.finished_ok.connect(self.on_finished)
+        self.send_controller.failed.connect(self.on_failed)
+        self.status.setText("正在发送…")
 
     def on_stop(self):
-        if self.sender_thread and self.sender_thread.isRunning():
-            self.sender_thread.stop()
+        if self._send_task and not self._send_task.done():
+            self.send_controller.stop()
             self.status.setText("停止指令已发送，将尽快停止。")
 
     def on_progress(self, msg: str):
@@ -748,9 +814,12 @@ def main():
         except Exception:
             pass
     app = QtWidgets.QApplication(sys.argv)
+    loop = QEventLoop(app)
+    asyncio.set_event_loop(loop)
     win = MainWindow()
     win.show()
-    sys.exit(app.exec_())
+    with loop:
+        loop.run_forever()
 
 
 if __name__ == "__main__":

@@ -53,8 +53,7 @@ goto :eof
 :deps_ok
 echo Dependencies installed.
 
-REM Ensure wxauto and pywin32 present (redundant if requirements ok)
-python -m pip install wxauto pywin32 -i %ALIYUN_INDEX% --trusted-host %ALIYUN_HOST% --timeout 120
+REM All dependencies are installed via requirements.txt
 
 set PYTHONUTF8=1
 python -X utf8 -m wx_order_sender.main
