@@ -9,6 +9,4 @@ PyQt5>=5.15.9,<6.0
 keyboard>=0.13.5,<1.0
 chardet>=5.2.0,<6.0
 qasync>=0.24.0,<1.0
-wechaty>=0.10.4,<1.0
-wechaty-puppet>=0.4.8,<1.0
-wechaty-puppet-service>=0.10.20,<1.0
+aiohttp>=3.9.0,<4.0

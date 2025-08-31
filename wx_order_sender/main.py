@@ -13,17 +13,11 @@ import pandas as pd
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from qasync import QEventLoop, asyncSlot
-
-try:
-    from wechaty import Wechaty, RoomQueryFilter, WechatyOptions
-    from wechaty_puppet import PuppetOptions
-    WECHATY_AVAILABLE = True
-except Exception:
-    WECHATY_AVAILABLE = False
+import aiohttp
 from openpyxl import load_workbook  # robust XLSX reader
 
 
-BOT_NOT_READY_MSG = "Wechaty 未连接，请先设置 Token 并点击‘连接’"
+BOT_NOT_READY_MSG = "Bot 未连接，请先设置模式/Token 并点击‘连接’"
 
 
 REQUIRED_COLUMNS = ["商品信息", "支付状态", "订单状态", "收货地址", "用户备注"]
@@ -344,10 +338,12 @@ class SendController(QtCore.QObject):
     def __init__(self):
         super().__init__()
         self._stop = asyncio.Event()
-        self.bot: Optional[Wechaty] = None
+        self._session: Optional[aiohttp.ClientSession] = None
 
-    def set_bot(self, bot: Optional['Wechaty']):
-        self.bot = bot
+    async def ensure_session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     def stop(self):
         if not self._stop.is_set():
@@ -362,46 +358,19 @@ class SendController(QtCore.QObject):
 
     async def send_texts(self, lunch_text: str, dinner_text: str, lunch_group: str, dinner_group: str, interval_min: float, interval_max: float, test_mode: bool):
         try:
-            if not WECHATY_AVAILABLE:
-                raise RuntimeError("Wechaty 依赖未安装")
-            if self.bot is None:
-                raise RuntimeError(BOT_NOT_READY_MSG)
+            session = await self.ensure_session()
             targets = [(lunch_group, lunch_text), (dinner_group, dinner_text)]
             if test_mode:
                 targets = [("末", lunch_text), ("末", dinner_text)]
-            for idx, (group, text) in enumerate(targets):
-                if self._stop.is_set():
-                    self.progressed.emit("已停止发送")
-                    return
-                group = str(group).strip()
-                if not group:
-                    continue
-                self.progressed.emit(f"正在发送到：{group}")
-                try:
-                    # Find room by topic
-                    room = await self.bot.Room.find(query=RoomQueryFilter(topic=group))
-                    if room is None:
-                        self.progressed.emit(f"未找到群聊：{group}")
-                        continue
-                    chunks = split_message_chunks(text, max_len=3500)
-                    for n, chunk in enumerate(chunks, start=1):
-                        if self._stop.is_set():
-                            self.progressed.emit("已停止发送")
-                            return
-                        await room.say(chunk)
-                        self.progressed.emit(f"已发送 {group} 第 {n} 段")
-                        if n < len(chunks):
-                            delay = random.uniform(interval_min, interval_max)
-                            ok = await self._sleep_with_check(delay)
-                            if not ok:
-                                return
-                except Exception as e:
-                    self.progressed.emit(f"发送到 {group} 失败：{e}")
-                if idx < len(targets) - 1:
-                    delay = random.uniform(interval_min, interval_max)
-                    ok = await self._sleep_with_check(delay)
-                    if not ok:
-                        return
+            payload = {
+                "items": [{"group": g, "text": t} for g, t in targets if str(g).strip()],
+                "intervalMin": float(interval_min),
+                "intervalMax": float(interval_max)
+            }
+            async with session.post("http://127.0.0.1:8788/send", json=payload, timeout=60) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise RuntimeError(f"发送失败：{resp.status} {text}")
             self.finished_ok.emit()
         except Exception as e:
             self.failed.emit(str(e))
@@ -435,7 +404,7 @@ def split_message_chunks(text: str, max_len: int = 3500) -> List[str]:
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("简知订单整理发送器（Wechaty）")
+        self.setWindowTitle("简知订单整理发送器（Node Wechaty）")
         self.setMinimumSize(960, 680)
 
         self.df: Optional[pd.DataFrame] = None
@@ -443,7 +412,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_file: Optional[str] = None
         self.mapping: Optional[ColumnMapping] = None
         self.send_controller = SendController()
-        self.bot: Optional[Wechaty] = None
         self._send_task: Optional[asyncio.Task] = None
 
         self._init_ui()
@@ -507,6 +475,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_connect.clicked.connect(self.on_connect)
         self.btn_disconnect.clicked.connect(self.on_disconnect)
 
+        self.puppet_combo = QtWidgets.QComboBox()
+        self.puppet_combo.addItems(["wechat(推荐)", "service(需Token)"])
+
 
         self.lunch_start = QtWidgets.QSpinBox()
         self.lunch_start.setRange(1, 100000)
@@ -544,8 +515,10 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addWidget(QtWidgets.QLabel("晚餐起始编号："), 0, 2)
         form.addWidget(self.dinner_start, 0, 3)
 
-        form.addWidget(QtWidgets.QLabel("Wechaty Token："), 1, 0)
-        form.addWidget(self.token_edit, 1, 1, 1, 3)
+        form.addWidget(QtWidgets.QLabel("模式："), 1, 0)
+        form.addWidget(self.puppet_combo, 1, 1)
+        form.addWidget(QtWidgets.QLabel("Token："), 1, 2)
+        form.addWidget(self.token_edit, 1, 3)
 
         form.addWidget(QtWidgets.QLabel("午餐发送至："), 2, 0)
         form.addWidget(self.cmb_lunch_group, 2, 1)
@@ -708,36 +681,29 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @asyncSlot()
     async def on_connect(self):
-        if not WECHATY_AVAILABLE:
-            QtWidgets.QMessageBox.critical(self, "连接失败", "Wechaty 依赖未安装")
-            return
+        puppet = 'wechat' if self.puppet_combo.currentIndex() == 0 else 'service'
         token = self.token_edit.text().strip()
-        if not token:
-            QtWidgets.QMessageBox.warning(self, "缺少 Token", "请先输入 Wechaty Puppet Service Token")
+        if puppet == 'service' and not token:
+            QtWidgets.QMessageBox.warning(self, "缺少 Token", "请选择 service 时需填写 Token")
             return
         try:
-            if self.bot is not None:
-                QtWidgets.QMessageBox.information(self, "提示", "已连接")
-                return
-            options = WechatyOptions(puppet='wechaty-puppet-service', puppet_options=PuppetOptions(token=token))
-            self.bot = Wechaty(options)
-            self.send_controller.set_bot(self.bot)
-            await self.bot.start()
+            session = await self.send_controller.ensure_session()
+            async with session.post("http://127.0.0.1:8788/connect", json={"puppet": puppet, "token": token}, timeout=60) as resp:
+                if resp.status != 200:
+                    txt = await resp.text()
+                    raise RuntimeError(txt)
             self.btn_connect.setEnabled(False)
             self.btn_disconnect.setEnabled(True)
-            self.status.setText("Wechaty 已连接")
+            self.status.setText("已连接 Bot 服务")
         except Exception as e:
-            self.bot = None
-            self.send_controller.set_bot(None)
             QtWidgets.QMessageBox.critical(self, "连接失败", str(e))
 
     @asyncSlot()
     async def on_disconnect(self):
         try:
-            if self.bot is not None:
-                await self.bot.stop()
-            self.bot = None
-            self.send_controller.set_bot(None)
+            session = await self.send_controller.ensure_session()
+            async with session.post("http://127.0.0.1:8788/disconnect", timeout=30) as resp:
+                pass
             self.btn_connect.setEnabled(True)
             self.btn_disconnect.setEnabled(False)
             self.status.setText("已断开连接")
@@ -764,9 +730,6 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "缺少群聊", "请至少设置一个群聊或开启测试模式")
             return
 
-        if self.bot is None:
-            QtWidgets.QMessageBox.warning(self, "未连接", BOT_NOT_READY_MSG)
-            return
         if self._send_task and not self._send_task.done():
             QtWidgets.QMessageBox.information(self, "提示", "发送任务进行中…")
             return
@@ -790,8 +753,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_stop(self):
         if self._send_task and not self._send_task.done():
-            self.send_controller.stop()
+            asyncio.create_task(self._post_stop())
             self.status.setText("停止指令已发送，将尽快停止。")
+
+    async def _post_stop(self):
+        try:
+            session = await self.send_controller.ensure_session()
+            async with session.post("http://127.0.0.1:8788/stop", timeout=10):
+                pass
+        except Exception:
+            pass
 
     def on_progress(self, msg: str):
         self.status.setText(msg)

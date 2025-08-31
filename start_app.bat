@@ -53,7 +53,26 @@ goto :eof
 :deps_ok
 echo Dependencies installed.
 
-REM All dependencies are installed via requirements.txt
+REM Prepare Node.js bot (Wechaty)
+where node >nul 2>nul
+if not %errorlevel%==0 (
+  echo Node.js is required (v18+). Please install Node.js and retry.
+  pause
+  goto :eof
+)
+
+pushd node_bot
+if not exist ".npmrc" (
+  echo registry=https://registry.npmmirror.com> .npmrc
+)
+if exist package-lock.json (
+  npm ci --no-fund --no-audit --registry https://registry.npmmirror.com
+) else (
+  npm install --no-fund --no-audit --registry https://registry.npmmirror.com
+)
+REM Start bot in background minimized window
+start "wechaty-bot" /min node server.mjs
+popd
 
 set PYTHONUTF8=1
 python -X utf8 -m wx_order_sender.main
