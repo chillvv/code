@@ -1,0 +1,25 @@
+{
+  "name": "electron-wx-order-sender",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Order formatter + WeChat sender (Electron + Wechaty)",
+  "main": "src/main.js",
+  "type": "module",
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "setup": "npm install --no-fund --no-audit",
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "dependencies": {
+    "electron": "^29.4.0",
+    "wechaty": "^1.20.2",
+    "wechaty-puppet-wechat": "^1.20.2",
+    "ws": "^8.17.1",
+    "xlsx": "^0.18.5"
+  }
+}
