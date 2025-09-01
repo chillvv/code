@@ -23,6 +23,16 @@ if not exist "%APP_DIR%\package.json" (
 )
 
 pushd "%APP_DIR%" >nul
+echo 使用应用目录：%APP_DIR%
+if not exist "%APP_DIR%\package.json" (
+  echo 警告：未发现 package.json，将尝试直接用主文件启动。
+)
+if not exist "%APP_DIR%\src\main.js" (
+  echo 错误：未找到主入口：%APP_DIR%\src\main.js
+  dir "%APP_DIR%\src" /b
+  pause
+  exit /b 1
+)
 
 REM Force China mirrors for npm and binaries (Electron, sharp, node-sass, etc.)
 if not exist ".npmrc" (
@@ -69,13 +79,14 @@ set "ELECTRON_ENABLE_LOGGING=1"
 set "ELECTRON_DEBUG_NOTIFICATIONS=1"
 set "ELECTRON_LOG_FILE=%APP_DIR%\logs\electron.log"
 set "ELECTRON_DISABLE_SECURITY_WARNINGS=1"
+set "MAIN_FILE=%APP_DIR%\src\main.js"
 
 if exist "%ELECTRON_BIN%" (
   echo 启动应用中...
-  call "%ELECTRON_BIN%" . --no-sandbox --disable-gpu --enable-logging 1>>"%APP_DIR%\logs\stdout.log" 2>>"%APP_DIR%\logs\stderr.log"
+  call "%ELECTRON_BIN%" "%MAIN_FILE%" --no-sandbox --disable-gpu --enable-logging 1>>"%APP_DIR%\logs\stdout.log" 2>>"%APP_DIR%\logs\stderr.log"
 ) else (
   echo 本地 electron 未找到，尝试使用 npx 启动...
-  npx --yes --registry https://registry.npmmirror.com electron . --no-sandbox --disable-gpu --enable-logging 1>>"%APP_DIR%\logs\stdout.log" 2>>"%APP_DIR%\logs\stderr.log"
+  npx --yes --registry https://registry.npmmirror.com electron "%MAIN_FILE%" --no-sandbox --disable-gpu --enable-logging 1>>"%APP_DIR%\logs\stdout.log" 2>>"%APP_DIR%\logs\stderr.log"
 )
 
 set EXITCODE=%errorlevel%
