@@ -55,29 +55,41 @@ echo Dependencies installed.
 
 REM Prepare Node.js bot (Wechaty)
 where node >nul 2>nul
-if not %errorlevel%==0 (
-  echo Node.js is required (v18+). Please install Node.js and retry.
-  pause
-  goto :eof
-)
+set NODE_OK=%errorlevel%
 
-pushd node_bot
-if not exist ".npmrc" (
-  echo registry=https://registry.npmmirror.com> .npmrc
-)
-if exist package-lock.json (
-  npm ci --no-fund --no-audit --registry https://registry.npmmirror.com
+if %NODE_OK%==0 (
+  pushd node_bot
+  if not exist ".npmrc" (
+    echo registry=https://registry.npmmirror.com> .npmrc
+  )
+  set "npm_config_registry=https://registry.npmmirror.com"
+  if exist package-lock.json (
+    npm ci --no-fund --no-audit --registry https://registry.npmmirror.com
+  ) else (
+    npm install --no-fund --no-audit --registry https://registry.npmmirror.com
+  )
+  if not %errorlevel%==0 (
+    echo NPM install failed. Bot may not start.
+    pause
+  )
+  set WX_BOT_PORT=8788
+  start "wechaty-bot" /min node server.mjs
+  popd
+  rem Wait for bot to be ready (up to ~20s)
+  for /l %%s in (1,1,10) do (
+    powershell -Command "try { iwr -UseBasicParsing http://127.0.0.1:8788/status -TimeoutSec 2 ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>nul && goto bot_ready
+    timeout /t 2 >nul
+  )
+  :bot_ready
 ) else (
-  npm install --no-fund --no-audit --registry https://registry.npmmirror.com
+  echo Node.js not found. UI will start without bot. Please install Node 18+.
 )
-REM Start bot in background minimized window
-start "wechaty-bot" /min node server.mjs
-popd
 
 set PYTHONUTF8=1
-python -X utf8 -m wx_order_sender.main
+start "wx-order-ui" python -X utf8 -m wx_order_sender.main
 
 echo.
+echo Setup finished. If UI did not appear, check errors above.
 pause
 
 endlocal
