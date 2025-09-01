@@ -86,7 +86,12 @@ if %NODE_OK%==0 (
 )
 
 set PYTHONUTF8=1
-start "wx-order-ui" python -X utf8 -m wx_order_sender.main
+echo Launching UI...
+python -X utf8 -m wx_order_sender.main
+set UI_EXIT=%errorlevel%
+if not %UI_EXIT%==0 (
+  echo UI exited with error code %UI_EXIT%.
+)
 
 echo.
 echo Setup finished. If UI did not appear, check errors above.
