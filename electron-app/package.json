@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Order formatter + WeChat sender (Electron + Wechaty)",
-  "main": "src/main.js",
+  "main": "./src/main.js",
   "type": "module",
   "author": "",
   "license": "MIT",

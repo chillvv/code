@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, globalShortcut } from 'electron'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { WechatyBuilder, log } from 'wechaty'
 
 let mainWindow = null
@@ -7,17 +8,20 @@ let bot = null
 let sending = false
 let stopFlag = false
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1080,
     height: 760,
     webPreferences: {
-      preload: path.join(process.cwd(), 'electron-app', 'src', 'preload.js'),
+      preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
     }
   })
-  mainWindow.loadFile(path.join(process.cwd(), 'electron-app', 'src', 'renderer', 'index.html'))
+  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
 
   globalShortcut.register('Control+Shift+S', () => {
     stopFlag = true
