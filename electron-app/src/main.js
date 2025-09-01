@@ -19,9 +19,16 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      devTools: true,
     }
   })
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'))
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('renderer crashed', details)
+  })
+  mainWindow.webContents.on('did-fail-load', (_e, errCode, errDesc) => {
+    console.error('did-fail-load', errCode, errDesc)
+  })
 
   globalShortcut.register('Control+Shift+S', () => {
     stopFlag = true
@@ -30,6 +37,21 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Compatibility flags and logging
+  app.commandLine.appendSwitch('no-sandbox')
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('ignore-gpu-blocklist')
+  app.commandLine.appendSwitch('disable-software-rasterizer')
+  process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = '1'
+  process.env.ELECTRON_ENABLE_LOGGING = '1'
+  process.on('uncaughtException', (err) => {
+    try { mainWindow?.webContents.send('status', String(err)) } catch {}
+    console.error('uncaughtException', err)
+  })
+  process.on('unhandledRejection', (reason) => {
+    try { mainWindow?.webContents.send('status', String(reason)) } catch {}
+    console.error('unhandledRejection', reason)
+  })
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -52,14 +52,24 @@ if %errorlevel% neq 0 (
   exit /b 1
 )
 
+REM Prepare logs folder
+if not exist "%APP_DIR%\logs" (
+  mkdir "%APP_DIR%\logs" >nul 2>nul
+)
+
 REM Launch Electron (quote paths with spaces/parentheses)
 set "ELECTRON_BIN=%APP_DIR%\node_modules\.bin\electron.cmd"
+set "ELECTRON_ENABLE_LOGGING=1"
+set "ELECTRON_DEBUG_NOTIFICATIONS=1"
+set "ELECTRON_LOG_FILE=%APP_DIR%\logs\electron.log"
+set "ELECTRON_DISABLE_SECURITY_WARNINGS=1"
+
 if exist "%ELECTRON_BIN%" (
   echo 启动应用中...
-  call "%ELECTRON_BIN%" . --no-sandbox
+  call "%ELECTRON_BIN%" . --no-sandbox --disable-gpu --enable-logging 1>>"%APP_DIR%\logs\stdout.log" 2>>"%APP_DIR%\logs\stderr.log"
 ) else (
   echo 本地 electron 未找到，尝试使用 npx 启动...
-  npx --yes --registry https://registry.npmmirror.com electron . --no-sandbox
+  npx --yes --registry https://registry.npmmirror.com electron . --no-sandbox --disable-gpu --enable-logging 1>>"%APP_DIR%\logs\stdout.log" 2>>"%APP_DIR%\logs\stderr.log"
 )
 
 set EXITCODE=%errorlevel%
