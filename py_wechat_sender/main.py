@@ -312,6 +312,7 @@ class WeChatSender(QtCore.QObject):
     def __init__(self):
         super().__init__()
         self._stop = threading.Event()
+        self.wechat_path: Optional[str] = None
 
     def stop(self):
         self._stop.set()
@@ -330,7 +331,9 @@ class WeChatSender(QtCore.QObject):
         main = auto.WindowControl(searchDepth=1, ClassName="WeChatMainWndForPC")
         if not main.Exists(0.5):
             try:
-                os.startfile("WeChat.exe")
+                exe = self._get_wechat_exe_path()
+                if exe:
+                    os.startfile(exe)
             except Exception:
                 pass
             # Wait up to 20s for window to appear
@@ -400,11 +403,39 @@ class WeChatSender(QtCore.QObject):
             pass
         # Last resort: try to start WeChat
         try:
-            os.startfile('WeChat.exe')
+            exe = self._get_wechat_exe_path()
+            if exe:
+                os.startfile(exe)
             time.sleep(2)
             return True
         except Exception:
             return False
+
+    def _get_wechat_exe_path(self) -> Optional[str]:
+        # Prefer user-specified path
+        candidates: List[str] = []
+        if self.wechat_path:
+            candidates.append(self.wechat_path)
+        # Common install paths
+        candidates.extend([
+            'WeChat.exe',
+            r'C:\\Program Files (x86)\\Tencent\\WeChat\\WeChat.exe',
+            r'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe',
+            r'D:\\Program Files (x86)\\Tencent\\WeChat\\WeChat.exe',
+            r'D:\\Program Files\\Tencent\\WeChat\\WeChat.exe',
+            r'D:\\Program Files (x86)\\Weixin\\Weixin.exe',
+            r'C:\\Program Files (x86)\\Weixin\\Weixin.exe',
+        ])
+        for p in candidates:
+            try:
+                if os.path.isabs(p) and os.path.exists(p):
+                    return p
+                # For bare name, allow OS to resolve via PATH
+                if p.lower().endswith('.exe') and not os.path.isabs(p):
+                    return p
+            except Exception:
+                continue
+        return None
 
     def _send_via_hotkeys(self, group: str, text: str, interval_min: float, interval_max: float):
         import pyautogui
