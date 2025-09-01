@@ -5,6 +5,7 @@ import random
 import threading
 import platform
 import traceback
+import tempfile
 from typing import List, Optional, Tuple, Dict
 
 import pandas as pd
@@ -38,55 +39,76 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 def load_dataframe(file_path: str) -> Tuple[pd.DataFrame, List[str]]:
     ext = os.path.splitext(file_path)[1].lower()
     if ext in [".xlsx", ".xlsm", ".xltx", ".xltm"]:
-        from openpyxl import load_workbook
-        wb = load_workbook(filename=file_path, read_only=True, data_only=True)
-        sheets = wb.sheetnames
-        ws = wb[sheets[0]]
-        rows = [list(r) for r in ws.iter_rows(values_only=True)]
-        # header guess
-        header_idx = 0
-        best = -1
-        for i in range(min(10, len(rows))):
-            cnt = sum(1 for v in rows[i] if v not in (None, ""))
-            if cnt > best:
-                best = cnt
-                header_idx = i
-        headers = [str(h).strip() if h is not None else f"列{i+1}" for i, h in enumerate(rows[header_idx] if rows else [])]
-        data = rows[header_idx+1:]
-        width = len(headers)
-        norm = []
-        for r in data:
-            r = list(r)
-            if len(r) < width:
-                r += [None]*(width-len(r))
-            elif len(r) > width:
-                r = r[:width]
-            norm.append(r)
-        return pd.DataFrame(norm, columns=headers), sheets
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(filename=file_path, read_only=True, data_only=True)
+            sheets = wb.sheetnames
+            ws = wb[sheets[0]]
+            rows = [list(r) for r in ws.iter_rows(values_only=True)]
+            # header guess
+            header_idx = 0
+            best = -1
+            for i in range(min(10, len(rows))):
+                cnt = sum(1 for v in rows[i] if v not in (None, ""))
+                if cnt > best:
+                    best = cnt
+                    header_idx = i
+            headers = [str(h).strip() if h is not None else f"列{i+1}" for i, h in enumerate(rows[header_idx] if rows else [])]
+            data = rows[header_idx+1:]
+            width = len(headers)
+            norm = []
+            for r in data:
+                r = list(r)
+                if len(r) < width:
+                    r += [None]*(width-len(r))
+                elif len(r) > width:
+                    r = r[:width]
+                norm.append(r)
+            return pd.DataFrame(norm, columns=headers), sheets
+        except Exception:
+            # Attempt repair by re-saving via Excel COM (Windows only)
+            if platform.system().lower() == "windows":
+                fixed = convert_via_excel_com(file_path)
+                if fixed and os.path.exists(fixed):
+                    return load_dataframe(fixed)
+            raise
     if ext == ".xls":
-        from pyexcel_xls import get_data  # type: ignore
-        data = get_data(file_path)
-        sheets = list(data.keys())
-        rows = data[sheets[0]]
-        header_idx = 0
-        best = -1
-        for i in range(min(10, len(rows))):
-            cnt = sum(1 for v in rows[i] if v not in (None, ""))
-            if cnt > best:
-                best = cnt
-                header_idx = i
-        headers = [str(h).strip() if h is not None else f"列{i+1}" for i, h in enumerate(rows[header_idx] if rows else [])]
-        data_rows = rows[header_idx+1:]
-        width = len(headers)
-        norm = []
-        for r in data_rows:
-            r = list(r)
-            if len(r) < width:
-                r += [None]*(width-len(r))
-            elif len(r) > width:
-                r = r[:width]
-            norm.append(r)
-        return pd.DataFrame(norm, columns=headers), sheets
+        # Try pyexcel-xls first
+        try:
+            from pyexcel_xls import get_data  # type: ignore
+            data = get_data(file_path)
+            sheets = list(data.keys())
+            rows = data[sheets[0]]
+            header_idx = 0
+            best = -1
+            for i in range(min(10, len(rows))):
+                cnt = sum(1 for v in rows[i] if v not in (None, ""))
+                if cnt > best:
+                    best = cnt
+                    header_idx = i
+            headers = [str(h).strip() if h is not None else f"列{i+1}" for i, h in enumerate(rows[header_idx] if rows else [])]
+            data_rows = rows[header_idx+1:]
+            width = len(headers)
+            norm = []
+            for r in data_rows:
+                r = list(r)
+                if len(r) < width:
+                    r += [None]*(width-len(r))
+                elif len(r) > width:
+                    r = r[:width]
+                norm.append(r)
+            return pd.DataFrame(norm, columns=headers), sheets
+        except Exception:
+            # Fallback 1: xlrd direct
+            try:
+                return read_xls_via_xlrd(file_path)
+            except Exception:
+                # Fallback 2: Excel COM convert to xlsx then load (Windows only)
+                if platform.system().lower() == "windows":
+                    fixed = convert_via_excel_com(file_path)
+                    if fixed and os.path.exists(fixed):
+                        return load_dataframe(fixed)
+                raise
     if ext == ".xlsb":
         xls = pd.ExcelFile(file_path, engine="pyxlsb")
         sheets = xls.sheet_names
@@ -108,6 +130,69 @@ def load_dataframe(file_path: str) -> Tuple[pd.DataFrame, List[str]]:
     enc = detect_csv_encoding(file_path)
     df = pd.read_csv(file_path, encoding=enc, sep=None, engine="python")
     return df, ["CSV"]
+
+
+def read_xls_via_xlrd(file_path: str) -> Tuple[pd.DataFrame, List[str]]:
+    import xlrd  # type: ignore
+    try:
+        book = xlrd.open_workbook(file_path, formatting_info=False, on_demand=True)
+    except Exception:
+        try:
+            # Some xlrd builds accept ignore_workbook_corruption
+            book = xlrd.open_workbook(file_path, formatting_info=False, on_demand=True, ignore_workbook_corruption=True)  # type: ignore
+        except Exception as e:
+            raise e
+    sheet_names = book.sheet_names()
+    sh = book.sheet_by_index(0)
+    rows = [sh.row_values(r) for r in range(sh.nrows)]
+    header_idx = 0
+    best = -1
+    for i in range(min(10, len(rows))):
+        cnt = sum(1 for v in rows[i] if v not in (None, ""))
+        if cnt > best:
+            best = cnt
+            header_idx = i
+    headers = [str(h).strip() if h is not None else f"列{i+1}" for i, h in enumerate(rows[header_idx] if rows else [])]
+    data_rows = rows[header_idx+1:]
+    width = len(headers)
+    norm = []
+    for r in data_rows:
+        r = list(r)
+        if len(r) < width:
+            r += [None]*(width-len(r))
+        elif len(r) > width:
+            r = r[:width]
+        norm.append(r)
+    return pd.DataFrame(norm, columns=headers), sheet_names
+
+
+def convert_via_excel_com(file_path: str) -> Optional[str]:
+    """Use Excel COM to resave as .xlsx to repair, Windows only.
+    Returns temp .xlsx path or None if not available.
+    """
+    if platform.system().lower() != "windows":
+        return None
+    try:
+        import win32com.client  # type: ignore
+    except Exception:
+        return None
+    try:
+        excel = win32com.client.Dispatch("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        wb = excel.Workbooks.Open(os.path.abspath(file_path))
+        tmp_xlsx = os.path.join(tempfile.gettempdir(), f"repaired_{int(time.time()*1000)}.xlsx")
+        # 51: xlOpenXMLWorkbook (xlsx)
+        wb.SaveAs(tmp_xlsx, 51)
+        wb.Close(False)
+        excel.Quit()
+        return tmp_xlsx
+    except Exception:
+        try:
+            excel.Quit()
+        except Exception:
+            pass
+        return None
 
 
 def infer_default_mapping(df: pd.DataFrame) -> Dict[str, str]:
