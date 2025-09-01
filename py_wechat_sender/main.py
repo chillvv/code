@@ -333,7 +333,12 @@ class WeChatSender(QtCore.QObject):
                 os.startfile("WeChat.exe")
             except Exception:
                 pass
-            auto.WaitForExistence(main, 15.0)
+            # Wait up to 20s for window to appear
+            start = time.time()
+            while time.time() - start < 20:
+                if main.Exists(0.5):
+                    break
+                time.sleep(0.5)
         if not main.Exists(0.5):
             raise RuntimeError("未找到微信窗口，请先登录微信")
         return main
@@ -343,16 +348,27 @@ class WeChatSender(QtCore.QObject):
         import pyperclip
         main = self._ensure_wechat()
         main.SetActive()
-        # Focus search
-        # In recent versions, there is a search edit control with name like 搜索
-        search = main.EditControl(foundIndex=1)
-        if not search.Exists(0.5):
-            raise RuntimeError("未找到微信搜索框")
-        search.Click()
-        search.SendKeys("^a{Delete}")
-        search.SendKeys(group)
-        time.sleep(0.5)
-        search.SendKeys("{Enter}")
+        # Focus search (Ctrl+F works in recent WeChat)
+        try:
+            auto.SendKeys('^f')  # try ctrl+f
+        except Exception:
+            try:
+                auto.SendKeys('{Ctrl}f')
+            except Exception:
+                pass
+        time.sleep(0.3)
+        # Type or paste group name, then Enter
+        try:
+            import pyperclip
+            pyperclip.copy(group)
+            auto.SendKeys('^a')
+            time.sleep(0.1)
+            auto.SendKeys('^v')
+        except Exception:
+            # Fallback: type directly
+            auto.SendKeys(group)
+        time.sleep(0.4)
+        auto.SendKeys('{Enter}')
         time.sleep(0.5)
         # Chat input is a RICHEDIT control, usually last EditControl
         edits = main.EditControls()
