@@ -344,46 +344,95 @@ class WeChatSender(QtCore.QObject):
         return main
 
     def _send_to_group(self, group: str, text: str, interval_min: float, interval_max: float):
-        import uiautomation as auto
-        import pyperclip
-        main = self._ensure_wechat()
-        main.SetActive()
-        # Focus search (Ctrl+F works in recent WeChat)
+        # First try accessibility method
         try:
-            auto.SendKeys('^f')  # try ctrl+f
-        except Exception:
-            try:
-                auto.SendKeys('{Ctrl}f')
-            except Exception:
-                pass
-        time.sleep(0.3)
-        # Type or paste group name, then Enter
-        try:
+            import uiautomation as auto
             import pyperclip
+            main = self._ensure_wechat()
+            main.SetActive()
+            try:
+                auto.SendKeys('^f')
+            except Exception:
+                try:
+                    auto.SendKeys('{Ctrl}f')
+                except Exception:
+                    pass
+            time.sleep(0.3)
             pyperclip.copy(group)
             auto.SendKeys('^a')
             time.sleep(0.1)
             auto.SendKeys('^v')
+            time.sleep(0.4)
+            auto.SendKeys('{Enter}')
+            time.sleep(0.5)
+            edits = main.EditControls()
+            if not edits:
+                raise RuntimeError('未找到输入框')
+            input_box = edits[-1]
+            chunks = split_message_chunks(text, 3500)
+            for idx, chunk in enumerate(chunks, start=1):
+                if self._stop.is_set():
+                    return
+                pyperclip.copy(chunk)
+                input_box.Click()
+                input_box.SendKeys('^v')
+                input_box.SendKeys('{Enter}')
+                self.progressed.emit(f"已发送 {group} 第 {idx} 段")
+                if idx < len(chunks):
+                    d = random.uniform(interval_min, interval_max)
+                    if not self._sleep(d):
+                        return
+            return
+        except Exception as e:
+            # Fallback to hotkey simulation approach (wxauto-like)
+            self.progressed.emit(f"辅助控件方式失败，改用热键发送：{e}")
+            self._send_via_hotkeys(group, text, interval_min, interval_max)
+
+    def _focus_wechat_window(self):
+        try:
+            import win32gui, win32con
+            hwnd = win32gui.FindWindow('WeChatMainWndForPC', None)
+            if hwnd:
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                win32gui.SetForegroundWindow(hwnd)
+                return True
         except Exception:
-            # Fallback: type directly
-            auto.SendKeys(group)
-        time.sleep(0.4)
-        auto.SendKeys('{Enter}')
+            pass
+        # Last resort: try to start WeChat
+        try:
+            os.startfile('WeChat.exe')
+            time.sleep(2)
+            return True
+        except Exception:
+            return False
+
+    def _send_via_hotkeys(self, group: str, text: str, interval_min: float, interval_max: float):
+        import pyautogui
+        import pyperclip
+        ok = self._focus_wechat_window()
+        if not ok:
+            raise RuntimeError('无法激活微信窗口')
         time.sleep(0.5)
-        # Chat input is a RICHEDIT control, usually last EditControl
-        edits = main.EditControls()
-        if not edits:
-            raise RuntimeError("未找到输入框")
-        input_box = edits[-1]
-        # Paste chunks and send
+        # Open search and enter group
+        try:
+            pyautogui.hotkey('ctrl', 'f')
+        except Exception:
+            pass
+        time.sleep(0.2)
+        pyperclip.copy(group)
+        pyautogui.hotkey('ctrl', 'a')
+        time.sleep(0.05)
+        pyautogui.hotkey('ctrl', 'v')
+        time.sleep(0.3)
+        pyautogui.press('enter')
+        time.sleep(0.5)
         chunks = split_message_chunks(text, 3500)
         for idx, chunk in enumerate(chunks, start=1):
             if self._stop.is_set():
                 return
             pyperclip.copy(chunk)
-            input_box.Click()
-            input_box.SendKeys("^v")
-            input_box.SendKeys("{Enter}")
+            pyautogui.hotkey('ctrl', 'v')
+            pyautogui.press('enter')
             self.progressed.emit(f"已发送 {group} 第 {idx} 段")
             if idx < len(chunks):
                 d = random.uniform(interval_min, interval_max)
