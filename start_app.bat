@@ -25,7 +25,13 @@ if not exist "%VENV_DIR%" (
   %PYLAUNCH% -m venv "%VENV_DIR%"
 )
 
-call "%VENV_DIR%\Scripts\activate.bat"
+set "PYEXE=%VENV_DIR%\Scripts\python.exe"
+
+if not exist "%PYEXE%" (
+  echo Python venv not created correctly.
+  pause
+  goto :eof
+)
 
 REM Upgrade pip toolchain
 set "ALIYUN_INDEX=https://mirrors.aliyun.com/pypi/simple/"
@@ -34,15 +40,16 @@ set "PIP_INDEX_URL=%ALIYUN_INDEX%"
 set "PIP_TRUSTED_HOST=%ALIYUN_HOST%"
 set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 
-python -m pip config set global.index-url %ALIYUN_INDEX% >nul 2>nul
-python -m pip config set install.trusted-host %ALIYUN_HOST% >nul 2>nul
+"%PYEXE%" -m pip config set global.index-url %ALIYUN_INDEX% >nul 2>nul
+"%PYEXE%" -m pip config set install.trusted-host %ALIYUN_HOST% >nul 2>nul
 
-python -m pip install --upgrade pip setuptools wheel -i %ALIYUN_INDEX% --trusted-host %ALIYUN_HOST%
+echo Upgrading pip toolchain...
+"%PYEXE%" -m pip install --upgrade pip setuptools wheel -i %ALIYUN_INDEX% --trusted-host %ALIYUN_HOST%
 
 REM Install dependencies with retries
 set RETRIES=3
 for /l %%i in (1,1,%RETRIES%) do (
-  python -m pip install -r requirements.txt -i %ALIYUN_INDEX% --trusted-host %ALIYUN_HOST% --timeout 120 && goto deps_ok
+  "%PYEXE%" -m pip install -r requirements.txt -i %ALIYUN_INDEX% --trusted-host %ALIYUN_HOST% --timeout 120 && goto deps_ok
   echo Install failed, retry %%i/%RETRIES%...
   timeout /t 2 >nul
 )
@@ -87,7 +94,7 @@ if %NODE_OK%==0 (
 
 set PYTHONUTF8=1
 echo Launching UI...
-python -X utf8 -m wx_order_sender.main
+"%PYEXE%" -X utf8 -m wx_order_sender.main
 set UI_EXIT=%errorlevel%
 if not %UI_EXIT%==0 (
   echo UI exited with error code %UI_EXIT%.
