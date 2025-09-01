@@ -9,11 +9,17 @@ set "SCRIPT_DIR=%~dp0"
 pushd "%SCRIPT_DIR%" >nul
 set "APP_DIR=%SCRIPT_DIR%electron-app"
 
+REM If running from inside electron-app, fallback to current folder
 if not exist "%APP_DIR%\package.json" (
-  echo 错误：未找到 electron-app\package.json
-  echo 请确认已解压完整项目，并从项目根目录运行此脚本。
-  pause
-  exit /b 1
+  if exist "%SCRIPT_DIR%package.json" (
+    set "APP_DIR=%SCRIPT_DIR%"
+  ) else (
+    echo 错误：未找到 electron-app\package.json
+    echo 请确认已解压完整项目，并从项目根目录运行此脚本。
+    echo 当前目录：%SCRIPT_DIR%
+    pause
+    exit /b 1
+  )
 )
 
 pushd "%APP_DIR%" >nul
