@@ -1,8 +1,12 @@
-pandas>=1.5.0,<2.3
-openpyxl>=3.1.0,<4.0
-xlrd==1.2.0
 PyQt5>=5.15.9,<6.0
 keyboard>=0.13.5,<1.0
 chardet>=5.2.0,<6.0
-pywin32>=306; platform_system == "Windows"
-wxauto>=3.9.10; platform_system == "Windows"
+pandas>=1.5.0,<2.3
+openpyxl>=3.1.0,<4.0
+xlrd>=2.0.1
+pyxlsb>=1.0.10,<2.0
+odfpy>=1.4.1,<2.0
+pyexcel-io>=0.6.7,<1.0
+pyexcel-xls>=0.6.2,<1.0
+uiautomation>=2.0.18,<3.0
+pyperclip>=1.8.2,<2.0
