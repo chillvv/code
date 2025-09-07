@@ -1,0 +1,31 @@
+餐数统计微信发送器 - 启动说明
+
+=== 推荐启动方式 ===
+
+方式1：双击 run.bat（最简单）
+方式2：双击 start.bat  
+方式3：右键点击 start.ps1 -> 使用PowerShell运行
+
+=== 手动启动 ===
+
+1. 打开命令提示符或PowerShell
+2. 切换到程序目录
+3. 运行：python main.py
+
+=== 如果启动失败 ===
+
+1. 确认已安装Python 3.8+
+2. 安装依赖：pip install -r requirements.txt
+3. 检查是否有杀毒软件阻止
+
+=== 常见问题 ===
+
+问题：批处理文件闪退或显示乱码
+解决：使用 run.bat 或手动启动
+
+问题：找不到Python
+解决：下载安装Python https://www.python.org/downloads/
+
+问题：缺少依赖包
+解决：运行 pip install -r requirements.txt
+
